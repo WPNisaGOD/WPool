@@ -1,0 +1,10 @@
+{
+  "name": "com.wpnisagod.wpool",
+  "displayName": "WPool",
+  "version": "1.0.0",
+  "unity": "2020.3",
+  "description": "WPool – лёгкий объектный пул для Unity",
+  "author": {
+    "name": "WPNisaGOD"
+  }
+}
