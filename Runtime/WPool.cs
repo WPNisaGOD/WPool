@@ -19,8 +19,7 @@ namespace WPNisaGOD.WPool
     public class WPool<T> : WPoolBase where T : MonoBehaviour
     {
         private readonly T _prefab;
-        private readonly Transform _container;
-        private Stack<T> _available = new Stack<T>();
+        private readonly Stack<T> _available = new Stack<T>();
         private readonly List<T> _allObjects = new List<T>();
         private readonly HashSet<T> _leased = new HashSet<T>();
 
@@ -31,18 +30,17 @@ namespace WPNisaGOD.WPool
         public override int TotalCount => _allObjects.Count;
         public override int AvailableCount => _available.Count;
 
-        private WPool(T prefab, int initialCount, Transform container)
+        private WPool(T prefab, int initialCount)
         {
             if (prefab == null) throw new ArgumentNullException(nameof(prefab));
             _prefab = prefab;
-            _container = container;
 
             for (int i = 0; i < initialCount; i++)
                 CreateObject(setActive: false, addToAvailable: true);
         }
 
-        internal static WPool<T> CreateInternal(T prefab, int initialCount, Transform container)
-            => new WPool<T>(prefab, initialCount, container);
+        internal static WPool<T> CreateInternal(T prefab, int initialCount)
+            => new WPool<T>(prefab, initialCount);
 
         private T CreateObject(bool setActive, bool addToAvailable)
         {
@@ -50,12 +48,15 @@ namespace WPNisaGOD.WPool
                 throw new MissingReferenceException(
                     $"Префаб пула {typeof(T)} уничтожен. Пересоздайте пул через WPool.GetOrCreate.");
 
-            T obj = Object.Instantiate(_prefab, _container);
+            T obj = Object.Instantiate(_prefab);
             if (obj == null)
                 throw new MissingReferenceException(
-                    $"Instantiate вернул null для префаба пула {typeof(T)}. Возможно, префаб уничтожен.");
+                    $"Instantiate вернул null для префаба пула {typeof(T)}.");
 
+            // root → child of DDOL root: остаётся в DDOL-сцене, иерархия чистая
+            obj.transform.SetParent(WPool.Root, worldPositionStays: false);
             obj.gameObject.SetActive(setActive);
+
             _allObjects.Add(obj);
             if (addToAvailable) _available.Push(obj);
             return obj;
@@ -67,7 +68,6 @@ namespace WPNisaGOD.WPool
             {
                 T obj = _available.Pop();
 
-                // Пропускаем уничтоженные объекты (пережили выгрузку сцены, Destroy снаружи пула и т.п.)
                 if (obj == null)
                 {
                     _allObjects.Remove(obj);
@@ -94,10 +94,11 @@ namespace WPNisaGOD.WPool
         {
             if (element == null) return;
             if (!_leased.Remove(element)) return;
-
-            // Элемент мог быть уничтожен уже после Remove из _leased — проверяем повторно.
             if (element == null) return;
 
+            // Возврат в DDOL: сначала отвязать от родителя в сцене,
+            // иначе Unity оставит объект в сцене родителя.
+            element.transform.SetParent(WPool.Root, worldPositionStays: true);
             element.gameObject.SetActive(false);
             _available.Push(element);
         }
@@ -111,16 +112,12 @@ namespace WPNisaGOD.WPool
         public override bool IsLeased(MonoBehaviour element)
             => element is T t && t != null && _leased.Contains(t);
 
-        /// <summary>
-        /// Удаляет из внутренних коллекций ссылки на уничтоженные Unity-объекты.
-        /// Вызывайте после выгрузки сцены, если пул пережил её.
-        /// </summary>
         public override void Prune()
         {
             _allObjects.RemoveAll(o => o == null);
             _leased.RemoveWhere(o => o == null);
 
-            var tmp = _available.ToArray(); // top-first
+            var tmp = _available.ToArray();
             _available.Clear();
             for (int i = tmp.Length - 1; i >= 0; i--)
                 if (tmp[i] != null)
@@ -146,11 +143,31 @@ namespace WPNisaGOD.WPool
         private static readonly Dictionary<MonoBehaviour, WPoolBase> _elementToPool
             = new Dictionary<MonoBehaviour, WPoolBase>();
 
-        public static WPool<T> GetOrCreate<T>(
-            T prefab, int initialCount, Transform container = null, bool autoExpand = true)
+        private static Transform _root;
+
+        /// <summary>
+        /// DDOL-root, под которым лежат все объекты пулов.
+        /// </summary>
+        public static Transform Root
+        {
+            get
+            {
+                if (_root == null)
+                {
+                    var go = new GameObject("[WPool]");
+                    Object.DontDestroyOnLoad(go);
+                    _root = go.transform;
+                }
+                return _root;
+            }
+        }
+
+        public static WPool<T> GetOrCreate<T>(T prefab, int initialCount, bool autoExpand = true)
             where T : MonoBehaviour
         {
             if (prefab == null) throw new ArgumentNullException(nameof(prefab));
+
+            _ = Root;
 
             var type = typeof(T);
             if (!_pools.TryGetValue(type, out var pools))
@@ -162,7 +179,7 @@ namespace WPNisaGOD.WPool
             if (pools.TryGetValue(prefab, out var existing))
                 return (WPool<T>)existing;
 
-            var pool = WPool<T>.CreateInternal(prefab, initialCount, container);
+            var pool = WPool<T>.CreateInternal(prefab, initialCount);
             pool.AutoExpand = autoExpand;
             pools[prefab] = pool;
             return pool;
@@ -216,22 +233,6 @@ namespace WPNisaGOD.WPool
                    && pools.TryGetValue(prefab, out var pool)
                 ? (WPool<T>)pool
                 : null;
-        }
-
-        public static void Prune<T>() where T : MonoBehaviour
-        {
-            var type = typeof(T);
-            if (!_pools.TryGetValue(type, out var pools)) return;
-
-            foreach (var pool in pools.Values)
-                pool.Prune();
-
-            var toRemove = new List<MonoBehaviour>();
-            foreach (var kv in _elementToPool)
-                if (kv.Key == null || pools.ContainsValue(kv.Value) && !pools.ContainsKey(kv.Key))
-                    toRemove.Add(kv.Key);
-            foreach (var k in toRemove)
-                _elementToPool.Remove(k);
         }
 
         public static void PruneAll()
