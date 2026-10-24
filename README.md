@@ -4,6 +4,11 @@
 
 ## Особенности
 
+- **Единый статический доступ** – `WPool.GetFreeElement(...)` и `WPool.Release(...)` вызываются из любого места без ссылок на пул
+- **Все пулы в одном месте** – один статический класс хранит пулы всех типов и всех префабов
+- **Несколько префабов одного типа** – каждый префаб имеет свой независимый пул
+- **Release без указания префаба** – менеджер сам находит пул через reverse-словарь
+- **Защита от двойного возврата** – `HashSet<T>` _leased не даст вернуть один и тот же объект дважды
 - **Быстрое получение** – стековая структура гарантирует O(1) при выдаче и возврате
 - **AutoExpand** – пул может автоматически создавать новые объекты, если свободных не осталось
 - **Предварительный прогрев** – задайте начальное количество экземпляров в конструкторе
@@ -26,21 +31,41 @@ using WPNisaGOD.WPool;
 public class Gun : MonoBehaviour
 {
     [SerializeField] private Bullet bulletPrefab;
-    private WPool<Bullet> _bulletPool;
 
     private void Awake()
     {
-        // 20 предсозданных пуль, родитель – этот же объект
-        _bulletPool = new WPool<Bullet>(bulletPrefab, 20, transform);
+        WPool.GetOrCreate(bulletPrefab, 20, container: transform);
     }
 
     public void Shoot(Vector3 position, Quaternion rotation)
     {
-        Bullet bullet = _bulletPool.GetFreeElement();
+        Bullet bullet = WPool.GetFreeElement(bulletPrefab);
         bullet.transform.SetPositionAndRotation(position, rotation);
         bullet.Init(/* параметры */);
     }
 }
+
+public class Bullet : MonoBehaviour
+{
+    private void OnDisable()
+    {
+        WPool.Release(this); // пул найдётся автоматически
+    }
+}
 ```
+
+## API
+
+| Метод | Назначение|
+|:-|:-|
+|`WPool.GetOrCreate<T>(prefab, count, container, autoExpand)`|Создать пул или вернуть существующий|
+|`WPool.GetFreeElement<T>(prefab = null, activate = true)`|Взять свободный объект|
+|`WPool.Release<T>(element)`|Вернуть объект, префаб находится автоматически|
+|`WPool.Release<T>(prefab, element)`|Вернуть в конкретный пул|
+|`WPool.HasPool<T>(prefab)`|Проверить существование пула|
+|`WPool.GetPool<T>(prefab)`|Получить `WPool<T>` напрямую|
+|`WPool.Clear<T>()`|Уничтожить все пулы одного типа|
+|`WPool.ClearAll()`|Уничтожить все пулы|
+
 ## От автора
 Айо, это `WPNisaGOD`! Если вы вдруг используете мои пакеты, то будет мегакруто если вы где-нибудь мельком напишите `Респект WPNisaGOD`. Всем рад <3
